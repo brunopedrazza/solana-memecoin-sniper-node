@@ -4,7 +4,9 @@ dotenv.config();
 import fetch from 'node-fetch';
 import bs58 from 'bs58';
 import WebSocket from 'ws';
-import { Connection, PublicKey, Keypair, sendAndConfirmTransaction, VersionedTransaction, Transaction, TransactionMessage, AddressLookupTableAccount } from '@solana/web3.js';
+import { 
+  Connection, PublicKey, Keypair, sendAndConfirmTransaction, VersionedTransaction, Transaction, TransactionMessage, AddressLookupTableAccount 
+} from '@solana/web3.js';
 import axios from 'axios';
 import { Raydium, API_URLS } from "@raydium-io/raydium-sdk-v2";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, NATIVE_MINT, TOKEN_PROGRAM_ID } from '@solana/spl-token';
@@ -32,11 +34,11 @@ const COINMARKETCAP_API_URL = 'https://pro-api.coinmarketcap.com/v1/cryptocurren
 const HELIUS_API_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
 const parameters = {
-  portfolio_percentage: 0.05,  // Default 1% of total portfolio per trade
+  portfolio_percentage: 0.1,  // Default 10% of total portfolio per trade
   min_liquidity: 100000,  // Minimum liquidity in USD
-  slippage: 10,  // Maximum slippage tolerance in percentage
-  takeProfit: 0.3,  // Take profit percentage
-  stopLoss: 0.7,  // Stop loss percentage
+  slippage: 20,  // Maximum slippage tolerance in percentage
+  takeProfit: 0.15,  // Take profit percentage
+  stopLoss: 0.3,  // Stop loss percentage
   rugcheck_enabled: true,  // Enable or disable RugCheck API
   rugcheck_max_score: 1000,
   pump_analysis_enabled: false  // Enable or disable pump token analysis
@@ -51,8 +53,16 @@ const connection = new Connection(HTTP_URL, {
 const privateKeyBytes = bs58.decode(PRIVATE_KEY);
 const keypair = Keypair.fromSecretKey(privateKeyBytes);
 console.log(`\nPublic Key: ${keypair.publicKey.toBase58()}`);
-getPortfolioBalance().then(balance => {
-  console.log(`Initial balance: ${balance / 1_000_000_000} SOL\n`);
+
+let solPrice = 0;
+getSolPrice().then(price => {
+  solPrice = price;
+  console.log(`Current SOL price: $${solPrice}`);
+  getPortfolioBalance().then(balance => {
+    const balanceInSol = balance / 1_000_000_000;
+    const balanceInDollars = balanceInSol * solPrice;
+    console.log(`Initial balance: ${balanceInSol} SOL ($${balanceInDollars.toFixed(2)})\n`);
+  });
 });
 
 
@@ -142,7 +152,6 @@ async function getSolPrice(): Promise<number | null> {
 }
 
 async function calculateLiquidity(tokenReserves: number): Promise<number | null> {
-  const solPrice = await getSolPrice();
   if (solPrice === null) {
     console.error('Failed to fetch SOL price.');
     return null;
@@ -250,7 +259,7 @@ async function startConnection(connection: Connection, programAddress: PublicKey
 async function getPortfolioBalance(): Promise<number> {
   console.log("\nFetching portfolio balance...");
   try {
-    const response = await connection.getBalance(keypair.publicKey);
+    const response = await connection.getBalance(keypair.publicKey, "confirmed");
     const balance = response;
     console.log(`Portfolio balance: ${balance} SOL`);
     return balance;
@@ -438,8 +447,13 @@ async function swap(inputMint: string, outputMint: string, amount: number, close
       //   console.log(`simulation error`, simulation.value.err);
       //   return false;
       // }
-      const txId = await sendAndConfirmTransaction(connection, transaction, [keypair], { skipPreflight: false, preflightCommitment: 'confirmed' });
-      console.log(`${++idx} transaction confirmed, txId: ${txId}`);
+      try {
+        const txId = await sendAndConfirmTransaction(connection, transaction, [keypair], { skipPreflight: false, preflightCommitment: 'confirmed' });
+        console.log(`${++idx} transaction confirmed, txId: ${txId}`);
+      } catch (e) {
+        console.error(`Error during swap: ${e}`);
+        return false;
+      }
     }
     return true;
   } else {
@@ -470,20 +484,19 @@ async function swap(inputMint: string, outputMint: string, amount: number, close
       //   console.log(`simulation error`, simulation.value.err);
       //   return false;
       // }
-      const txId = await connection.sendTransaction(transaction, { skipPreflight: false, preflightCommitment: 'confirmed' });
-      const { lastValidBlockHeight, blockhash } = await connection.getLatestBlockhash({
-        commitment: 'finalized',
-      });
-      console.log(`${idx} transaction sending..., txId: ${txId}`);
-      await connection.confirmTransaction(
-        {
-          blockhash,
-          lastValidBlockHeight,
-          signature: txId,
-        },
-        'confirmed'
-      );
-      console.log(`${idx} transaction confirmed`);
+      try {
+        const txId = await connection.sendTransaction(transaction, { skipPreflight: false, preflightCommitment: 'confirmed' });
+        console.log(`${idx} transaction sending..., txId: ${txId}`);
+        await connection.confirmTransaction(
+          txId,
+          'confirmed'
+        );
+        console.log(`${idx} transaction confirmed`);
+
+      } catch (e) {
+        console.error(`Error during swap: ${e}`);
+        return false;
+      }
     }
     return true;
   }
@@ -505,7 +518,7 @@ async function applyStrategy(token: string) {
 
     console.log(`Bought ${tokenBalance.value.uiAmount} tokens of ${tokenSymbol}`);
 
-    const initialPrice = amountInSol / tokenBalance.value.uiAmount;
+    const initialPrice = amountInLamports / tokenBalance.value.uiAmount;
     console.log(`Initial price: ${initialPrice} lamports per token`);
 
     let sellRetries = 0;
@@ -524,7 +537,7 @@ async function applyStrategy(token: string) {
       const outputAmount = Number(newQuote.data.outputAmount);
 
       // log current price and the current loss/gain percentage
-      const currentPrice = (outputAmount / 1_000_000_000) / tokenBalance.value.uiAmount;
+      const currentPrice = outputAmount / tokenBalance.value.uiAmount;
       const gainLossPercentage = ((currentPrice - initialPrice) / initialPrice) * 100;
       console.log(`Current price: ${currentPrice} lamports per token. Gain/Loss: ${gainLossPercentage.toFixed(2)}% (${new Date().toISOString()})`);
 
@@ -548,6 +561,10 @@ async function applyStrategy(token: string) {
           }
           continue;
         }
+        const currentBalance = await getPortfolioBalance();
+        const balanceInSol = currentBalance / 1_000_000_000;
+        const balanceInDollars = balanceInSol * solPrice;
+        console.log(`Current balance: ${balanceInSol} SOL ($${balanceInDollars.toFixed(2)})\n`);
         break;
       }
     }
@@ -648,6 +665,12 @@ async function bloxrouteNewPairs() {
         'Authorization': BLOXROUTE_AUTH
       }
     });
+
+    const refreshConnection = () => {
+      console.log('Refreshing WebSocket connection...');
+      ws.close();
+    };
+    setTimeout(refreshConnection, 5 * 60 * 1000);
 
     ws.on('open', () => {
       console.log('WebSocket connection opened.');
