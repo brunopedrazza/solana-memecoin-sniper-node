@@ -4,8 +4,8 @@ dotenv.config();
 import fetch from 'node-fetch';
 import bs58 from 'bs58';
 import WebSocket from 'ws';
-import { 
-  Connection, PublicKey, Keypair, sendAndConfirmTransaction, VersionedTransaction, Transaction, TransactionMessage, AddressLookupTableAccount 
+import {
+  Connection, PublicKey, Keypair, sendAndConfirmTransaction, VersionedTransaction, Transaction, TransactionMessage, AddressLookupTableAccount
 } from '@solana/web3.js';
 import axios from 'axios';
 import { Raydium, API_URLS } from "@raydium-io/raydium-sdk-v2";
@@ -467,7 +467,7 @@ async function swap(inputMint: string, outputMint: string, amount: number, close
               key: lookup.accountKey,
               state: AddressLookupTableAccount.deserialize(await connection.getAccountInfo(lookup.accountKey).then((res) => res.data)),
             })
-          }))
+          }));
         var message = TransactionMessage.decompile(transaction.message, { addressLookupTableAccounts: addressLookupTableAccounts });
         const closeTokenAccountIx = createCloseAccountInstruction(
           inputTokenAcc,
@@ -487,10 +487,14 @@ async function swap(inputMint: string, outputMint: string, amount: number, close
       try {
         const txId = await connection.sendTransaction(transaction, { skipPreflight: false, preflightCommitment: 'confirmed' });
         console.log(`${idx} transaction sending..., txId: ${txId}`);
-        await connection.confirmTransaction(
-          txId,
-          'confirmed'
-        );
+
+        const latestBlockHash = await connection.getLatestBlockhash();
+
+        await connection.confirmTransaction({
+          blockhash: latestBlockHash.blockhash,
+          lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+          signature: txId,
+        });
         console.log(`${idx} transaction confirmed`);
 
       } catch (e) {
@@ -552,7 +556,7 @@ async function applyStrategy(token: string) {
         }
         console.log(`Selling ${tokenBalance.value.uiAmount} tokens of ${tokenSymbol} for ${outputAmount} lamports (${outputAmount / 1_000_000_000} SOL)`);
         const sellSuccess = await swap(token, NATIVE_MINT.toBase58(), Number(tokenBalance.value.amount), true, newQuote);
-        
+
         if (!sellSuccess) {
           sellRetries++;
           console.error(`Error during swap: ${token}`);
@@ -600,6 +604,7 @@ async function newPairAnalysis(token: string, lamportsReserves: number): Promise
 }
 
 async function solanaStreamingNewPairs() {
+  let isLocked = false;
   const connect = function () {
     const ws = new WebSocket(SOLANA_STREAMING_WS_URL, {
       headers: {
@@ -618,7 +623,8 @@ async function solanaStreamingNewPairs() {
 
     ws.on('message', async (data) => {
       const message = JSON.parse(data.toString());
-      if (message.method === 'newPairNotification') {
+      if (message.method === 'newPairNotification' && !isLocked) {
+        isLocked = true;
         const params = message.params;
         const pair = params.pair;
         const baseToken = pair.baseToken;
@@ -642,6 +648,7 @@ async function solanaStreamingNewPairs() {
           console.log(`Buying token: ${token}`);
           await applyStrategy(token);
         }
+        isLocked = false;
       }
     });
 
@@ -685,6 +692,11 @@ async function bloxrouteNewPairs() {
 
     ws.on('message', async (data) => {
       const message = JSON.parse(data.toString());
+      if (message.error) {
+        console.log('Subscription error: ', message.error);
+        ws.close();
+        return;
+      }
       if (message.method === 'subscribe' && !isLocked) {
         isLocked = true;
         const params = message.params;
@@ -694,44 +706,37 @@ async function bloxrouteNewPairs() {
         if (pool.poolType === 'standard') {
           const token = pool.token1MintAddress === NATIVE_MINT.toBase58() ? pool.token2MintAddress : pool.token1MintAddress;
           const lamportsReserves = pool.token1MintAddress === NATIVE_MINT.toBase58() ? pool.token1Reserves : pool.token2Reserves;
-          
+
           const currentTime = new Date();
           console.log(`\nNew pool notification received`);
           console.log(`Current Time: ${currentTime.toISOString()}`);
           console.log(`Pool Address: ${pool.poolAddress}`);
-  
+
           const analysisResult = await newPairAnalysis(token, lamportsReserves);
           if (analysisResult) {
             console.log(`Buying token: ${token}`);
             await applyStrategy(token);
           }
-          isLocked = false;
         }
+        isLocked = false;
       }
     });
 
     ws.on('close', () => {
       console.log('WebSocket connection closed, trying to reconnect...');
       setTimeout(connect, 5 * 1000); // retry connecting in 5 seconds
+      return;
     });
 
     ws.on('error', (error) => {
       console.error(`WebSocket error: ${error.message}`);
+      return;
     });
   };
   connect();
 }
 
 (async () => {
-  // const token = "ycF7Dnfq8G1FzUXpBq4nmzkz3NJV3kUMhv7KJyzpump";
-  // const tokenBalance = await connection.getTokenAccountBalance(getAssociatedTokenAddress(new PublicKey(token), keypair.publicKey), "finalized");
-  // console.log(`Selling ${tokenBalance.value.uiAmount} tokens of ${token}`);
-  // const swapSuccess = await swap(token, NATIVE_MINT.toBase58(), Number(tokenBalance.value.amount), true);
-  // if (!swapSuccess) {
-  //   console.error(`Error during swap: ${token}`);
-  //   return;
-  // }
-  // await newPairAnalysis("J8pWMtEfGayHBo565ZGRUWxFbHyjqNL7nrfT6eN5bzLQ", "AeBLk27VFF88WrH57C7WkQdGfaZfy74x8K2snoa6pump", 0, 0);
   await bloxrouteNewPairs();
   // await solanaStreamingNewPairs();
   // await startConnection(connection, RAYDIUM, INSTRUCTION_NAME).catch(console.error);
