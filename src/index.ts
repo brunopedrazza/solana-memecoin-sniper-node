@@ -44,6 +44,10 @@ const parameters = {
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
+const connection = new Connection(HTTP_URL, {
+  wsEndpoint: WSS_URL
+});
+
 const privateKeyBytes = bs58.decode(PRIVATE_KEY);
 const keypair = Keypair.fromSecretKey(privateKeyBytes);
 console.log(`\nPublic Key: ${keypair.publicKey.toBase58()}`);
@@ -51,9 +55,6 @@ getPortfolioBalance().then(balance => {
   console.log(`Initial balance: ${balance / 1_000_000_000} SOL\n`);
 });
 
-const connection = new Connection(HTTP_URL, {
-  wsEndpoint: WSS_URL
-});
 
 interface SwapCompute {
   id: string
