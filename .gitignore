@@ -128,8 +128,5 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
-<<<<<<< HEAD
-=======
 
 .DS_Store
->>>>>>> 1f57e89 (Update gitignore)
