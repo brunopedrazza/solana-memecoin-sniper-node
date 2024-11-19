@@ -4,8 +4,8 @@
   "main": "index.js",
   "scripts": {
     "start": "tsc && node dist/index.js",
-    "lint": "eslint . --ext .ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "lint": "eslint . --ext .ts"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +23,7 @@
   "dependencies": {
     "@raydium-io/raydium-sdk-v2": "^0.1.79-alpha",
     "@solana/web3.js": "^1.95.4",
+    "decimal.js": "^10.4.3",
     "dotenv": "^16.4.5"
   }
 }
