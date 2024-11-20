@@ -34,14 +34,15 @@ const COINMARKETCAP_API_URL = 'https://pro-api.coinmarketcap.com/v1/cryptocurren
 const HELIUS_API_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
 const parameters = {
-  portfolio_percentage: 0.1,  // Default 10% of total portfolio per trade
-  min_liquidity: 100000,  // Minimum liquidity in USD
+  portfolioPercentage: 0.1,  // Default 10% of total portfolio per trade
+  minLiquidity: 100000,  // Minimum liquidity in USD
   slippage: 20,  // Maximum slippage tolerance in percentage
   takeProfit: 0.15,  // Take profit percentage
   stopLoss: 0.3,  // Stop loss percentage
-  rugcheck_enabled: true,  // Enable or disable RugCheck API
-  rugcheck_max_score: 1000,
-  pump_analysis_enabled: false  // Enable or disable pump token analysis
+  rugcheckEnabled: true,  // Enable or disable RugCheck API
+  rugcheckMaxScore: 1000,
+  pumpAnalysisEnabled: false,  // Enable or disable pump token analysis
+  blacklistedWords: ["trump"]
 };
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
@@ -270,7 +271,7 @@ async function getPortfolioBalance(): Promise<number> {
 }
 
 async function rugCheck(tokenAddress: string): Promise<boolean> {
-  if (!parameters.rugcheck_enabled) {
+  if (!parameters.rugcheckEnabled) {
     return true;
   }
 
@@ -289,7 +290,7 @@ async function rugCheck(tokenAddress: string): Promise<boolean> {
       }
       const totalRiskScore = risks.reduce((acc, risk) => acc + risk.score, 0);
       console.log(`Total Risk Score: ${totalRiskScore}`);
-      if (totalRiskScore >= parameters.rugcheck_max_score) {
+      if (totalRiskScore >= parameters.rugcheckMaxScore) {
         console.log(`RugCheck API indicates high risk for token (score ${score}): ${tokenAddress}`);
         for (const risk of risks) {
           console.log(`Risk (score ${risk.score}): ${risk.name} - ${risk.description}`);
@@ -488,13 +489,13 @@ async function swap(inputMint: string, outputMint: string, amount: number, close
         const txId = await connection.sendTransaction(transaction, { skipPreflight: false, preflightCommitment: 'confirmed' });
         console.log(`${idx} transaction sending..., txId: ${txId}`);
 
-        const latestBlockHash = await connection.getLatestBlockhash();
+        const latestBlockHash = await connection.getLatestBlockhash("confirmed");
 
         await connection.confirmTransaction({
           blockhash: latestBlockHash.blockhash,
           lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
           signature: txId,
-        });
+        }, "confirmed");
         console.log(`${idx} transaction confirmed`);
 
       } catch (e) {
@@ -508,7 +509,7 @@ async function swap(inputMint: string, outputMint: string, amount: number, close
 
 async function applyStrategy(token: string) {
   const balance = await getPortfolioBalance();
-  const amountInLamports = Math.floor(balance * parameters.portfolio_percentage);
+  const amountInLamports = Math.floor(balance * parameters.portfolioPercentage);
   try {
     const amountInSol = amountInLamports / 1_000_000_000;
     console.log(`Swapping ${amountInLamports} lamports (${amountInSol} SOL) to ${token}`);
@@ -578,10 +579,21 @@ async function applyStrategy(token: string) {
 }
 
 async function newPairAnalysis(token: string, lamportsReserves: number): Promise<boolean> {
+  const tokenSymbol = await getTokenMetadataSymbol(token);
+
   console.log(`Token: ${token}`);
   console.log(`Reserves: ${lamportsReserves / 1_000_000_000} SOL`);
+  console.log(`Token Symbol: ${tokenSymbol}`);
 
-  if (parameters.pump_analysis_enabled && token.endsWith("pump")) {
+  // check if any blacklisted words are present in the token symbol
+  for (const word of parameters.blacklistedWords) {
+    if (tokenSymbol.toLowerCase().includes(word)) {
+      console.log(`Discarding token: ${token} (contains blacklisted word: ${word})`);
+      return false;
+    }
+  }
+
+  if (parameters.pumpAnalysisEnabled && token.endsWith("pump")) {
     console.log(`Discarding token: ${token} (ends with "pump")`);
     return false;
   }
@@ -589,8 +601,8 @@ async function newPairAnalysis(token: string, lamportsReserves: number): Promise
   const liquidity = await calculateLiquidity(lamportsReserves);
   console.log(`Liquidity: ${liquidity} USD`);
 
-  if (liquidity < parameters.min_liquidity) {
-    console.log(`Liquidity is below minimum threshold: ${parameters.min_liquidity} USD`);
+  if (liquidity < parameters.minLiquidity) {
+    console.log(`Liquidity is below minimum threshold: ${parameters.minLiquidity} USD`);
     return false;
   }
 
