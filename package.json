@@ -27,6 +27,14 @@
     "dotenv": "^16.4.5"
   },
   "overrides": {
-    "axios": "^1.16.0"
+    "axios": "^1.16.0",
+    "@solana/web3.js": {
+      "rpc-websockets": {
+        "ws": "^8.21.0"
+      },
+      "jayson": {
+        "ws": "^7.5.11"
+      }
+    }
   }
 }
